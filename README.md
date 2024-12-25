@@ -1,7 +1,7 @@
 # Calendar Scheduler Backend Application
 
 ## Overview
-This is a very backend application for a **Calendar Scheduler** that enables efficient user and event management. Developed using **Java**, **Spring Boot**, and **PostgreSQL**, this application provides functionalities such as adding users, managing busy time slots, detecting scheduling conflicts, and suggesting available time slots for events. It also supports recurring events, advanced search functionality and events with multiple users. 
+This is a backend application for a **Calendar Scheduler** that enables efficient user and event management. Developed using **Java**, **Spring Boot**, and **PostgreSQL**, this application provides functionalities such as adding users, managing busy time slots, detecting scheduling conflicts, and suggesting available time slots for events. It also supports recurring events, advanced search functionality and events with multiple users. 
 
 ---
 
