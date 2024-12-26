@@ -13,6 +13,7 @@ import com.example.calendar_scheduler.validations.DateValidation;
 import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -62,6 +63,11 @@ public class EventServiceImpl implements EventService {
             throw new InvalidTimeStampException("End Date must be same or after End time");
         }
 
+        long timeStamp = ChronoUnit.HOURS.between(eventDTO.getStartTime(),eventDTO.getEndTime());
+        if(timeStamp>24){
+            throw new InvalidTimeStampException("event should no longer than 24 hourse!!");
+        }
+
         Set<User> users = eventDTO.getUserIds().stream()
                 .map(id -> userRepository.findById(id).orElseThrow(() -> new UserNotFoundException("User not found: " + id)))
                 .collect(Collectors.toSet());
@@ -95,45 +101,122 @@ public class EventServiceImpl implements EventService {
         LocalDate localDate = LocalDate.parse(date);
         LocalDateTime startOfDay = localDate.atStartOfDay();
         LocalDateTime endOfDay = localDate.atTime(LocalTime.MAX);
+
         List<Event> events = eventRepository.findByUsers_Id(userId);
 
-        List<Event> answer =  events.stream().filter(event -> {
-            if ((event.getStartTime().isAfter(endOfDay)) ||
-                    (event.getEndDate() != null && event.getEndDate().isBefore(startOfDay))) {
-                return false;
+        List<Event> answer = new ArrayList<>();
+        for(Event event: events){
+            if(event.getStartTime().isAfter(endOfDay) || (event.getEndDate() != null && event.getEndDate().isBefore(startOfDay))){
+                continue;
             }
 
-            long daysBetweenStartAndQuery = ChronoUnit.DAYS.between(event.getStartTime(), startOfDay);
+            long daysBetweenStartAndQuery = ChronoUnit.DAYS.between(event.getStartTime().toLocalDate(),startOfDay);
+            long daysBetweenEndAndQuery = ChronoUnit.DAYS.between(event.getEndTime().toLocalDate(),startOfDay);
 
-            if (event.getRecurrence() == null || event.getRecurrence() == RecurrenceType.NONE) {
-                return daysBetweenStartAndQuery == 0;
+//            System.out.println(daysBetweenStartAndQuery);
+//            System.out.println(daysBetweenStartAndQuery);
+            boolean isStartEndSame = daysBetweenStartAndQuery == daysBetweenEndAndQuery;
+            List<LocalDateTime> conflicts = new ArrayList<>();
+            if(event.getRecurrence() == null || event.getRecurrence() == RecurrenceType.NONE){
+                if(daysBetweenStartAndQuery ==0 || (event.getStartTime().isBefore(startOfDay) && event.getEndTime().isAfter(startOfDay))){
+                    conflicts.add(event.getStartTime());
+                }
+            }else{
+                switch(event.getRecurrence()){
+                    case DAILY : {
+                        if (daysBetweenStartAndQuery >= 0 &&
+                                (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()))) {
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+//                            System.out.println(event.getStartTime());
+//                            System.out.println(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+//                            System.out.println(event.getStartTime().plusDays(daysBetweenEndAndQuery));
+//                            System.out.println(daysBetweenEndAndQuery);
+//                            System.out.println();
+//                            System.out.println("Yayyyyy working here ");
+                        }
+                        if(!isStartEndSame && daysBetweenEndAndQuery>=0 && (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()) )){
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenEndAndQuery));
+//                            System.out.println(event.getStartTime().plusDays(daysBetweenEndAndQuery));
+//                            System.out.println("Yayyyyy working here ");
+                        }
+                        break;
+                    }
+                    case WEEKLY: {
+                        if(daysBetweenStartAndQuery>=0 && daysBetweenStartAndQuery%7 == 0 && (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()))){
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+                        } else if(!isStartEndSame && daysBetweenEndAndQuery>=0 && daysBetweenEndAndQuery%7 ==0 && (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()))){
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+                        }
+                        break;
+                    }
+                    case MONTHLY: {
+                        if (event.getStartTime().getDayOfMonth() == localDate.getDayOfMonth() &&
+                                daysBetweenStartAndQuery >= 0 &&
+                                (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()))) {
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+                        }else if(!isStartEndSame && daysBetweenEndAndQuery>=0 && event.getEndTime().getDayOfMonth() == localDate.getDayOfMonth() && (event.getEndDate() == null || !localDate.isAfter(event.getEndDate().toLocalDate()))){
+                            conflicts.add(event.getStartTime().plusDays(daysBetweenStartAndQuery));
+                        }
+                    }
+                    default: break;
+                }
             }
-
-            switch (event.getRecurrence()) {
-                case DAILY:
-                    return daysBetweenStartAndQuery >= 0 &&
-                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
-
-                case WEEKLY:
-                    return daysBetweenStartAndQuery % 7 == 0 &&
-                            daysBetweenStartAndQuery >= 0 &&
-                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
-
-                case MONTHLY:
-                    return event.getStartTime().getDayOfMonth() == startOfDay.getDayOfMonth() &&
-                            daysBetweenStartAndQuery >= 0 &&
-                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
-
-                default:
-                    return false;
+            for(LocalDateTime conflict : conflicts){
+                Event curr = new Event(
+                        event.getId(),
+                        event.getTitle(),
+                        event.getDescription(),
+                        conflict,
+                        conflict.plus(Duration.between(event.getStartTime(),event.getEndTime())),
+                        event.getRecurrence(),
+                        event.getEndDate(),
+                        event.getUsers()
+                );
+                answer.add(curr);
             }
-        }).collect(Collectors.toList());
-
-        if(answer.size() ==0 ){
-            throw new NoDataFoundException("No events for the user: " + userId + " on the date : " + date);
         }
-
+        if(answer.isEmpty()){
+            throw new NoDataFoundException("No events for the user: "+ userId + " on the date : "+ date);
+        }
         return answer;
+
+//        List<Event> answer =  events.stream().filter(event -> {
+//            if ((event.getStartTime().isAfter(endOfDay)) ||
+//                    (event.getEndDate() != null && event.getEndDate().isBefore(startOfDay))) {
+//                return false;
+//            }
+//
+//            long daysBetweenStartAndQuery = ChronoUnit.DAYS.between(event.getStartTime(), startOfDay);
+//
+//            if (event.getRecurrence() == null || event.getRecurrence() == RecurrenceType.NONE) {
+//                return daysBetweenStartAndQuery == 0;
+//            }
+//
+//            switch (event.getRecurrence()) {
+//                case DAILY:
+//                    return daysBetweenStartAndQuery >= 0 &&
+//                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
+//
+//                case WEEKLY:
+//                    return daysBetweenStartAndQuery % 7 == 0 &&
+//                            daysBetweenStartAndQuery >= 0 &&
+//                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
+//
+//                case MONTHLY:
+//                    return event.getStartTime().getDayOfMonth() == startOfDay.getDayOfMonth() &&
+//                            daysBetweenStartAndQuery >= 0 &&
+//                            (event.getEndDate() == null || !startOfDay.isAfter(event.getEndDate()));
+//
+//                default:
+//                    return false;
+//            }
+//        }).collect(Collectors.toList());
+//
+//        if(answer.size() ==0 ){
+//            throw new NoDataFoundException("No events for the user: " + userId + " on the date : " + date);
+//        }
+//
+//        return answer;
     }
 
 
@@ -147,8 +230,11 @@ public class EventServiceImpl implements EventService {
         if(!DateValidation.isValidDate(date)){
             throw new InvalidInputException("Invalid Date!!");
         }
+        LocalDate localDate = LocalDate.parse(date);
+        LocalDateTime startOfDay = localDate.atStartOfDay();
+        LocalDateTime endOfDay = localDate.atTime(LocalTime.MAX);
         List<Event> events = getEventsByUserAndDate(userId, date);
-        events.sort(Comparator.comparing(event -> ((Event) event).getStartTime().toLocalTime())
+        events.sort(Comparator.comparing(event -> ((Event) event).getStartTime())
                 .thenComparing(event -> ((Event) event).getEndTime()));
 
 
@@ -156,18 +242,13 @@ public class EventServiceImpl implements EventService {
         LocalDateTime prev = events.get(0).getEndTime();
         int prevIndex = 0;
         for (int i = 1; i < events.size(); i++) {
-            if(prev.toLocalTime().isAfter(events.get(i).getStartTime().toLocalTime())){
+            if(prev.isAfter(events.get(i).getStartTime())){
                 conflicts.add(events.get(prevIndex));
                 conflicts.add(events.get(i));
+//                System.out.print(prev + " " + events.get(i).getStartTime());
+//                System.out.println();
             }
-            if(events.get(i).getStartTime().toLocalTime().isAfter(events.get(i).getEndTime().toLocalTime())){
-                ++i;
-                while(i<events.size()){
-                    conflicts.add(events.get(i));i++;
-                }
-                break;
-            }
-            if(!prev.toLocalTime().isAfter(events.get(i).getEndTime().toLocalTime())){
+            if(!prev.isAfter(events.get(i).getEndTime())){
                 prev = events.get(i).getEndTime();
                 prevIndex = i;
             }
@@ -199,31 +280,30 @@ public class EventServiceImpl implements EventService {
                 .collect(Collectors.toList());
 
 
-        events.sort(Comparator.comparing(event -> ((Event) event).getStartTime().toLocalTime())
+        events.sort(Comparator.comparing(event -> ((Event) event).getStartTime())
                 .thenComparing(event -> ((Event) event).getEndTime()));
 
         List<String> availableSlots = new ArrayList<>();
-        LocalTime slotStartTime = startOfDay.toLocalTime();
+        LocalDateTime slotStartTime = startOfDay;
         Boolean flag = false;
         for (Event event : events) {
-            LocalTime eventStartTime = event.getStartTime().toLocalTime();
-            LocalTime eventEndTime = event.getEndTime().toLocalTime();
+            LocalDateTime eventStartTime = event.getStartTime();
+            LocalDateTime eventEndTime = event.getEndTime();
 
             if (slotStartTime.plusMinutes(durationMinutes).isBefore(eventStartTime)) {
-                availableSlots.add(slotStartTime.toString() + " to " + eventStartTime.toString());
+                availableSlots.add(slotStartTime.toLocalTime().toString() + " to " + eventStartTime.toLocalTime().toString());
             }
 
-            if(event.getStartTime().toLocalTime().isAfter(event.getEndTime().toLocalTime())){
-                flag = true;
-                break;
+            if(event.getEndTime().isAfter(endOfDay)){
+                flag =true; break;
             }
 
             slotStartTime = eventEndTime.isAfter(slotStartTime) ? eventEndTime : slotStartTime;
         }
 
 
-        if (!flag && slotStartTime.plusMinutes(durationMinutes).isBefore(endOfDay.toLocalTime())) {
-            availableSlots.add(slotStartTime.toString() + " to " + endOfDay.toLocalTime().toString());
+        if (!flag && slotStartTime.plusMinutes(durationMinutes).isBefore(endOfDay)) {
+            availableSlots.add(slotStartTime.toLocalTime().toString() + " to " + "24:00");
         }
 
         return availableSlots;
